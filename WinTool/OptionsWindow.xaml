@@ -1,0 +1,20 @@
+<Window x:Class="WinTool.OptionsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="软件设置"
+        Width="380"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+    <StackPanel Margin="16">
+
+        <CheckBox x:Name="StartupBox" Content="开机自启"
+                  Checked="Startup_Changed" Unchecked="Startup_Changed" />
+        <TextBlock Margin="0,8,0,0" Foreground="#666666" TextWrapping="Wrap"
+                   Text="通过“启动”文件夹中的快捷方式实现，不写注册表。" />
+
+        <Button Content="关闭" Width="80" Height="26" Margin="0,18,0,0"
+                HorizontalAlignment="Right" IsDefault="True" IsCancel="True" Click="Close_Click" />
+    </StackPanel>
+</Window>

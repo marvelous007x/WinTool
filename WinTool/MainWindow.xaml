@@ -1,0 +1,120 @@
+<Window x:Class="WinTool.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WinTool"
+        Icon="app.ico"
+        Width="680"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterScreen">
+    <StackPanel Margin="12">
+
+        <TabControl MinHeight="300">
+
+            <TabItem Header="按键映射">
+                <StackPanel Margin="8">
+                    <CheckBox x:Name="EngineEnabledBox" Content="启用按键映射" FontWeight="Bold"
+                              Margin="2,2,0,8" Checked="EngineToggle_Changed" Unchecked="EngineToggle_Changed" />
+
+                    <ListView x:Name="MappingList" Height="240">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="启用" Width="56">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox HorizontalAlignment="Center"
+                                                      IsChecked="{Binding Enabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      Click="Enabled_Click" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="源按键" Width="200" DisplayMemberBinding="{Binding SourceText}" />
+                                <GridViewColumn Header="目标按键" Width="200" DisplayMemberBinding="{Binding TargetText}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="添加" Width="80" Margin="0,0,8,0" Click="Add_Click" />
+                        <Button Content="编辑" Width="80" Margin="0,0,8,0" Click="Edit_Click" />
+                        <Button Content="删除" Width="80" Click="Delete_Click" />
+                    </StackPanel>
+
+                    <GroupBox x:Name="EditorBox" Header="编辑映射" Margin="0,10,0,0" Visibility="Collapsed">
+                        <Grid Margin="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Text="源按键：" VerticalAlignment="Center" />
+                            <DockPanel Grid.Column="1">
+                                <Button DockPanel.Dock="Right" Content="▾" Width="24" Height="28" Margin="4,0,0,0"
+                                        ToolTip="选择标准键盘上没有实体按键的键（媒体键等）"
+                                        Click="MediaKeys_Click" Tag="source" />
+                                <TextBox x:Name="SourceBox" Height="28" IsReadOnly="True"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="点击这里，然后按下要映射的按键"
+                                         PreviewKeyDown="Capture_PreviewKeyDown"
+                                         GotKeyboardFocus="Capture_GotFocus"
+                                         LostKeyboardFocus="Capture_LostFocus" />
+                            </DockPanel>
+
+                            <TextBlock Grid.Column="2" Text="目标按键：" VerticalAlignment="Center" Margin="12,0,0,0" />
+                            <DockPanel Grid.Column="3">
+                                <Button DockPanel.Dock="Right" Content="▾" Width="24" Height="28" Margin="4,0,0,0"
+                                        ToolTip="选择标准键盘上没有实体按键的键（媒体键等）"
+                                        Click="MediaKeys_Click" Tag="target" />
+                                <TextBox x:Name="TargetBox" Height="28" IsReadOnly="True"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="点击这里，然后按下目标按键"
+                                         PreviewKeyDown="Capture_PreviewKeyDown"
+                                         GotKeyboardFocus="Capture_GotFocus"
+                                         LostKeyboardFocus="Capture_LostFocus" />
+                            </DockPanel>
+
+                            <Button Grid.Column="4" Content="保存" Width="72" Margin="12,0,6,0" Click="SaveEdit_Click" />
+                            <Button Grid.Column="5" Content="取消" Width="72" Click="CancelEdit_Click" />
+                        </Grid>
+                    </GroupBox>
+                </StackPanel>
+            </TabItem>
+
+            <TabItem Header="截图">
+                <StackPanel Margin="8">
+                    <CheckBox x:Name="ScreenshotEnabledBox" Content="启用截图" FontWeight="Bold"
+                              Margin="2,2,0,8" Checked="ScreenshotToggle_Changed" Unchecked="ScreenshotToggle_Changed" />
+
+                    <Grid Margin="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="180" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="热键：" VerticalAlignment="Center" />
+                        <TextBox x:Name="HotkeyBox" Grid.Column="1" Height="28" IsReadOnly="True"
+                                 VerticalContentAlignment="Center"
+                                 ToolTip="点击这里，按下 Ctrl/Alt/Shift 组合键"
+                                 PreviewKeyDown="Hotkey_PreviewKeyDown"
+                                 GotKeyboardFocus="Capture_GotFocus"
+                                 LostKeyboardFocus="Capture_LostFocus" />
+                    </Grid>
+
+                    <TextBlock Margin="6,16,0,0" Foreground="#666666" TextWrapping="Wrap"
+                               Text="触发热键后拖拽框选；选区可拖手柄缩放、方向键微调位置；标注用矩形/椭圆/箭头/画笔/文字，工具条最左侧色块切换颜色。Enter 或「确认」复制并关闭（双击、Ctrl+C 同效），Ctrl+S 保存，Esc 或右键取消。热键必须包含 Ctrl/Alt/Shift。" />
+                </StackPanel>
+            </TabItem>
+
+        </TabControl>
+
+        <DockPanel Margin="2,10,0,0">
+            <Button DockPanel.Dock="Right" Content="软件设置…" Width="88" Height="26"
+                    VerticalAlignment="Center" Click="Options_Click" />
+            <TextBlock Foreground="#666666" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"
+                       Text="提示：点击源/目标输入框后直接按下按键即可录入；键盘上没有实体键的键（音量、媒体、F13 等）点输入框右侧 ▾ 选择。普通权限下映射对以管理员运行的程序无效。关闭本窗口后程序仍在托盘运行。" />
+        </DockPanel>
+    </StackPanel>
+</Window>
