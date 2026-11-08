@@ -192,13 +192,13 @@ internal sealed class AnnotationWindow : Window
 
     readonly ScreenShot _shot;
     readonly double _scale;
+    readonly System.Drawing.Rectangle _monitor;
 
-    readonly Grid _root = new();
     readonly Canvas _imageCanvas = new();
     readonly Grid _imageHost = new();
     readonly Canvas _overlay = new();
-    readonly Image _image = new() { Stretch = Stretch.Fill };
-    readonly Image _backdropImage = new() { Stretch = Stretch.Fill };
+    readonly Image _image = new() { Stretch = Stretch.Fill, IsHitTestVisible = false };
+    readonly System.Windows.Shapes.Path _mask = new() { IsHitTestVisible = false };
     readonly SelectionFrame _frame = new();
     readonly AnnotationLayer _layer = new();
     readonly List<(Button Button, ToolKind Kind)> _toolButtons = new();
@@ -217,7 +217,6 @@ internal sealed class AnnotationWindow : Window
     double _toolbarWidthDip;
 
     Int32Rect _rect;
-    bool _toolbarBelow = true;
 
     ToolKind _tool;
     Point _dragStart;
@@ -235,6 +234,18 @@ internal sealed class AnnotationWindow : Window
         _shot = shot;
         _rect = screenRect;
         _scale = Native.GetScaleForPoint(screenRect.X + screenRect.Width / 2, screenRect.Y + screenRect.Height / 2);
+        _monitor = WinForms.Screen.FromPoint(new System.Drawing.Point(
+            screenRect.X + screenRect.Width / 2,
+            screenRect.Y + screenRect.Height / 2)).Bounds;
+
+        // 整屏截图原样铺满窗口，选区只是遮罩上挖出的洞。
+        var monitorCrop = new CroppedBitmap(shot.Image, new Int32Rect(
+            _monitor.Left - shot.Bounds.X,
+            _monitor.Top - shot.Bounds.Y,
+            Math.Min(_monitor.Width, shot.Bounds.Width),
+            Math.Min(_monitor.Height, shot.Bounds.Height)));
+        monitorCrop.Freeze();
+        _image.Source = monitorCrop;
 
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -246,47 +257,49 @@ internal sealed class AnnotationWindow : Window
         BuildLayout();
         UpdateGeometry();
 
+        // 先建好 HWND 并直接铺满所在显示器：整个标注过程窗口位置和大小都不变，
+        // 缩放选区时只重绘窗口内部，避免反复 SetWindowPos 导致画面被 DWM 拉伸弹动。
+        new WindowInteropHelper(this).EnsureHandle();
+        ApplyMonitorBounds();
+
         app.SetSuspended(false);
     }
 
     void BuildLayout()
     {
+        _mask.Fill = new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0));
+
         _imageHost.ClipToBounds = true;
-        _imageHost.Children.Add(_image);
         _imageHost.Children.Add(_layer);
         _imageHost.Children.Add(_overlay);
         _imageHost.Children.Add(_frame);
         _frame.IsHitTestVisible = false;
 
         _imageCanvas.ClipToBounds = true;
+        _imageCanvas.Children.Add(_image);
+        _imageCanvas.Children.Add(_mask);
         _imageCanvas.Children.Add(_imageHost);
 
         _layer.MouseLeftButtonDown += Layer_MouseLeftButtonDown;
         _layer.MouseMove += Layer_MouseMove;
         _layer.MouseLeftButtonUp += Layer_MouseLeftButtonUp;
-        _layer.MouseRightButtonDown += (_, e) => { Close(); e.Handled = true; };
+        // 右键关闭要等这次右键消息处理完再执行，否则窗口先消失，
+        // 松开的右键会落到下面的程序/桌面上，弹出对方的右键菜单。
+        _layer.MouseRightButtonDown += (_, e) => e.Handled = true;
+        MouseRightButtonDown += (_, e) => e.Handled = true;
+        MouseRightButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            Dispatcher.BeginInvoke(new Action(Close), DispatcherPriority.Background);
+        };
 
         _toolbar = BuildToolbar();
         _toolbar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         _toolbarWidthDip = _toolbar.DesiredSize.Width;
+        _toolbar.Width = _toolbarWidthDip;
+        _imageCanvas.Children.Add(_toolbar);
 
-        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        _root.Children.Add(_imageCanvas);
-        _root.Children.Add(_toolbar);
-        SetToolbarSide(true);
-
-        // 窗口比截图宽（选区比工具条窄）时，多出来的部分填「原截图 + 同样的压暗」，
-        // 和底层遮罩无缝衔接，不再是灰底。
-        var backdrop = new Grid();
-        backdrop.Children.Add(_backdropImage);
-        backdrop.Children.Add(new System.Windows.Shapes.Rectangle
-        {
-            Fill = new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0)),
-            IsHitTestVisible = false,
-        });
-        backdrop.Children.Add(_root);
-        Content = backdrop;
+        Content = _imageCanvas;
 
         PreviewKeyDown += Window_PreviewKeyDown;
         SelectTool(ToolKind.Rect);
@@ -296,19 +309,18 @@ internal sealed class AnnotationWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        ApplyMonitorBounds();
         UpdateGeometry();
         // WM_DPICHANGED 可能按建议矩形覆盖尺寸，布局完成后再定位一次
-        Dispatcher.BeginInvoke(new Action(UpdateGeometry), DispatcherPriority.Loaded);
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            ApplyMonitorBounds();
+            UpdateLayout();
+            UpdateGeometry();
+        }), DispatcherPriority.Loaded);
     }
 
-    void SetToolbarSide(bool below)
-    {
-        _toolbarBelow = below;
-        Grid.SetRow(_imageCanvas, below ? 0 : 1);
-        Grid.SetRow(_toolbar, below ? 1 : 0);
-    }
-
-    /// <summary>按当前选区重算裁剪图、窗口位置与尺寸。</summary>
+    /// <summary>按当前选区重算遮罩洞、选区层和工具栏位置（窗口本身不动）。</summary>
     void UpdateGeometry()
     {
         var b = _shot.Bounds;
@@ -318,44 +330,47 @@ internal sealed class AnnotationWindow : Window
         int h = Math.Clamp(_rect.Height, 1, b.Y + b.Height - y);
         _rect = new Int32Rect(x, y, w, h);
 
-        int toolbarPhysical = (int)Math.Round(ToolbarHeight * _scale);
-        int winWidth = Math.Max(w, (int)Math.Ceiling(_toolbarWidthDip * _scale));
-        int winHeight = h + toolbarPhysical;
+        double cw = _imageCanvas.ActualWidth > 1 ? _imageCanvas.ActualWidth : _monitor.Width / _scale;
+        double ch = _imageCanvas.ActualHeight > 1 ? _imageCanvas.ActualHeight : _monitor.Height / _scale;
+        double sx = cw / _monitor.Width;
+        double sy = ch / _monitor.Height;
 
-        var work = WinForms.Screen.FromPoint(
-            new System.Drawing.Point(x + w / 2, y + h / 2)).WorkingArea;
-        bool below = y + h + toolbarPhysical <= work.Bottom || y - toolbarPhysical < work.Top;
-        SetToolbarSide(below);
+        _image.Width = cw;
+        _image.Height = ch;
 
-        int winX = x - (winWidth - w) / 2;
-        int winY = below ? y : y - toolbarPhysical;
-        winX = Math.Clamp(winX, work.Left, Math.Max(work.Left, work.Right - winWidth));
-        winY = Math.Clamp(winY, work.Top, Math.Max(work.Top, work.Bottom - winHeight));
+        double selX = (x - _monitor.Left) * sx;
+        double selY = (y - _monitor.Top) * sy;
+        double selW = w * sx;
+        double selH = h * sy;
 
-        var crop = new CroppedBitmap(_shot.Image, new Int32Rect(x - b.X, y - b.Y, w, h));
-        crop.Freeze();
-        _image.Source = crop;
-
-        var backdrop = new CroppedBitmap(
-            _shot.Image, new Int32Rect(winX - b.X, winY - b.Y, winWidth, winHeight));
-        backdrop.Freeze();
-        _backdropImage.Source = backdrop;
-
-        _imageHost.Width = w / _scale;
-        _imageHost.Height = h / _scale;
-        _imageCanvas.Height = h / _scale;
-        Canvas.SetLeft(_imageHost, (x - winX) / _scale);
-        Canvas.SetTop(_imageHost, 0);
+        _imageHost.Width = selW;
+        _imageHost.Height = selH;
+        Canvas.SetLeft(_imageHost, selX);
+        Canvas.SetTop(_imageHost, selY);
         _frame.InvalidateVisual();
 
-        ApplyPhysicalBounds(winX, winY, winWidth, winHeight);
+        var geometry = new GeometryGroup { FillRule = FillRule.EvenOdd };
+        geometry.Children.Add(new RectangleGeometry(new Rect(0, 0, cw, ch)));
+        geometry.Children.Add(new RectangleGeometry(new Rect(selX, selY, selW, selH)));
+        _mask.Data = geometry;
+        _mask.Width = cw;
+        _mask.Height = ch;
+
+        double tbW = _toolbarWidthDip;
+        bool below = selY + selH + ToolbarHeight <= ch || selY - ToolbarHeight < 0;
+        double left = Math.Clamp(selX + (selW - tbW) / 2, 0, Math.Max(0, cw - tbW));
+        double top = below ? selY + selH : selY - ToolbarHeight;
+        top = Math.Clamp(top, 0, Math.Max(0, ch - ToolbarHeight));
+        Canvas.SetLeft(_toolbar, left);
+        Canvas.SetTop(_toolbar, top);
     }
 
-    void ApplyPhysicalBounds(int x, int y, int width, int height)
+    void ApplyMonitorBounds()
     {
         var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd == IntPtr.Zero || width <= 0 || height <= 0) return;
-        Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, x, y, width, height, Native.SWP_NOACTIVATE);
+        if (hwnd == IntPtr.Zero) return;
+        Native.SetWindowPos(hwnd, Native.HWND_TOPMOST,
+            _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height, Native.SWP_NOACTIVATE);
     }
 
     // ---- 工具栏 ----
@@ -786,10 +801,15 @@ internal sealed class AnnotationWindow : Window
         int height = _rect.Height;
         double scale = _layer.ActualWidth > 1 ? width / _layer.ActualWidth : _scale;
 
+        var b = _shot.Bounds;
+        var background = new CroppedBitmap(
+            _shot.Image, new Int32Rect(_rect.X - b.X, _rect.Y - b.Y, width, height));
+        background.Freeze();
+
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen())
         {
-            dc.DrawImage(_image.Source, new Rect(0, 0, width, height)); // 背景 1:1
+            dc.DrawImage(background, new Rect(0, 0, width, height)); // 背景 1:1
             dc.PushTransform(new ScaleTransform(scale, scale));
             AnnotationRenderer.Draw(dc, _layer.Items, _layer.Thickness, 1.0);
             dc.Pop();

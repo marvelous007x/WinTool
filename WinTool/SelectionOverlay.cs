@@ -124,8 +124,12 @@ internal static class SelectionSession
             try { overlay.ReleaseMouseCapture(); } catch { }
         }
 
-        var completed = s_completed;
+        // 提交后 Dragging 已为 false，重绘一次让选区白框消失；
+        // 亮区保留到标注窗口盖上为止，避免中间闪一帧全暗。
         s_committed = true;
+        foreach (var overlay in s_overlays) overlay.Redraw();
+
+        var completed = s_completed;
         completed?.Invoke(sel);
     }
 
@@ -245,10 +249,14 @@ internal sealed class SelectionOverlay : Window
             if (!SelectionSession.Committed) SelectionSession.PointerUp();
             e.Handled = true;
         };
-        MouseRightButtonDown += (_, e) =>
+        // 右键取消要等这次右键消息处理完再执行：如果在按下时就隐藏覆盖层，
+        // 松开的右键会落到下面的窗口上（比如桌面会弹出右键菜单）。
+        MouseRightButtonDown += (_, e) => e.Handled = true;
+        MouseRightButtonUp += (_, e) =>
         {
-            if (!SelectionSession.Committed) SelectionSession.Cancel();
             e.Handled = true;
+            if (!SelectionSession.Committed)
+                Dispatcher.BeginInvoke(new Action(SelectionSession.Cancel), DispatcherPriority.Background);
         };
         PreviewKeyDown += (_, e) =>
         {
@@ -312,6 +320,8 @@ internal sealed class SelectionOverlay : Window
         double h = ActualHeight;
         if (w <= 1 || h <= 1) return;
 
+        // 标注窗口铺满显示器、完全盖住覆盖层，亮区留着也不会露出来；
+        // 提交时保留亮区，避免标注窗口出现前的这一帧整屏突然变暗（闪一下）。
         var selection = SelectionSession.Selection;
         Rect? hole = null;
 
