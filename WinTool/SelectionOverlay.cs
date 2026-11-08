@@ -23,11 +23,12 @@ internal static class SelectionSession
     static DrawingPoint s_start;
     static Int32Rect? s_selection;
     static bool s_committed;
+    static bool s_sessionOpen;
 
     public static bool Dragging { get; private set; }
     public static Int32Rect? Selection => s_selection;
-    /// <summary>已有框选会话（覆盖层还在）。</summary>
-    public static bool Active => s_overlays.Count > 0;
+    /// <summary>已有框选会话（覆盖层还在）。覆盖层窗口本身缓存下来，平时隐藏。</summary>
+    public static bool Active => s_sessionOpen;
     /// <summary>选区已确定、正在标注窗口中编辑；覆盖层保持压暗。</summary>
     public static bool Committed => s_committed;
 
@@ -36,15 +37,50 @@ internal static class SelectionSession
         Reset();
         s_shot = shot;
         s_completed = completed;
+        s_sessionOpen = true;
 
-        foreach (var screen in WinForms.Screen.AllScreens)
+        // 覆盖层窗口创建一次后缓存复用，之后每次截图只换图再显示，
+        // 避免每次热键都重新创建 WPF 窗口（第一屏要等 100ms 以上）。
+        EnsureOverlays();
+        foreach (var overlay in s_overlays)
         {
-            var overlay = new SelectionOverlay(shot, screen.Bounds);
-            s_overlays.Add(overlay);
+            overlay.SetShot(shot);
             overlay.ShowAtPhysicalBounds();
         }
 
         if (s_overlays.Count > 0) s_overlays[^1].Activate();
+    }
+
+    static void EnsureOverlays()
+    {
+        var screens = WinForms.Screen.AllScreens;
+        bool same = s_overlays.Count == screens.Length;
+        if (same)
+        {
+            for (int i = 0; i < screens.Length; i++)
+            {
+                if (s_overlays[i].Monitor != screens[i].Bounds)
+                {
+                    same = false;
+                    break;
+                }
+            }
+        }
+
+        if (!same)
+        {
+            foreach (var overlay in s_overlays)
+            {
+                try { overlay.Close(); } catch { }
+            }
+            s_overlays.Clear();
+        }
+
+        if (s_overlays.Count == 0)
+        {
+            foreach (var screen in screens)
+                s_overlays.Add(new SelectionOverlay(screen.Bounds));
+        }
     }
 
     public static void PointerDown(SelectionOverlay origin)
@@ -116,13 +152,13 @@ internal static class SelectionSession
         foreach (var overlay in s_overlays)
         {
             try { overlay.ReleaseMouseCapture(); } catch { }
-            overlay.Close();
+            overlay.Hide();
         }
-        s_overlays.Clear();
         s_shot = null;
         s_completed = null;
         s_selection = null;
         s_committed = false;
+        s_sessionOpen = false;
         Dragging = false;
     }
 
@@ -153,8 +189,9 @@ internal sealed class SelectionOverlay : Window
     readonly Border _labelBox;
     readonly TextBlock _label;
     readonly Canvas _canvas;
+    readonly Image _image;
 
-    public SelectionOverlay(ScreenShot shot, DrawingRectangle monitor)
+    public SelectionOverlay(DrawingRectangle monitor)
     {
         _monitor = monitor;
 
@@ -165,17 +202,7 @@ internal sealed class SelectionOverlay : Window
         Background = Brushes.Black;
         Cursor = Cursors.Cross;
 
-        var imageRect = new Int32Rect(
-            monitor.Left - shot.Bounds.X,
-            monitor.Top - shot.Bounds.Y,
-            Math.Min(monitor.Width, shot.Bounds.Width),
-            Math.Min(monitor.Height, shot.Bounds.Height));
-
-        var image = new Image
-        {
-            Source = new CroppedBitmap(shot.Image, imageRect),
-            Stretch = Stretch.Fill,
-        };
+        _image = new Image { Stretch = Stretch.Fill };
 
         _mask = new Path
         {
@@ -204,7 +231,7 @@ internal sealed class SelectionOverlay : Window
         _canvas.Children.Add(_border);
         _canvas.Children.Add(_labelBox);
 
-        Content = new Grid { Children = { image, _canvas } };
+        Content = new Grid { Children = { _image, _canvas } };
 
         SizeChanged += (_, _) => Redraw();
         MouseLeftButtonDown += (_, e) =>
@@ -233,11 +260,33 @@ internal sealed class SelectionOverlay : Window
         };
     }
 
+    public DrawingRectangle Monitor => _monitor;
+
     public bool Contains(int x, int y) => _monitor.Contains(x, y);
+
+    /// <summary>更新这一屏要显示的截图；窗口复用时每次会话调用一次。</summary>
+    public void SetShot(ScreenShot shot)
+    {
+        var imageRect = new Int32Rect(
+            _monitor.Left - shot.Bounds.X,
+            _monitor.Top - shot.Bounds.Y,
+            Math.Min(_monitor.Width, shot.Bounds.Width),
+            Math.Min(_monitor.Height, shot.Bounds.Height));
+        var crop = new CroppedBitmap(shot.Image, imageRect);
+        crop.Freeze();
+        _image.Source = crop;
+
+        // 复用的窗口上残留着上次的选区遮罩，先清掉再显示。
+        Redraw();
+    }
 
     /// <summary>用物理像素直接定位，不做 DIP 换算。</summary>
     public void ShowAtPhysicalBounds()
     {
+        // 先建好 HWND，在窗口可见之前就摆到正确位置和大小；
+        // 直接 Show() 会先以 WPF 的默认尺寸（1440×759）在窗口默认位置闪一下。
+        new WindowInteropHelper(this).EnsureHandle();
+        ApplyBounds();
         Show();
         ApplyBounds();
         // 移动到不同 DPI 的显示器时 WPF 会按 WM_DPICHANGED 的建议矩形改窗口尺寸，

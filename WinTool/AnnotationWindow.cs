@@ -524,8 +524,15 @@ internal sealed class AnnotationWindow : Window
     void SelectTool(ToolKind kind)
     {
         _tool = kind;
+        // 选中的工具用蓝色底 + 加粗，和其他工具区分开。
+        var selected = new SolidColorBrush(Color.FromRgb(0x1E, 0x90, 0xFF));
+        var normal = new SolidColorBrush(Color.FromRgb(0x3C, 0x3C, 0x3C));
         foreach (var (button, k) in _toolButtons)
-            button.FontWeight = k == kind ? FontWeights.Bold : FontWeights.Normal;
+        {
+            bool on = k == kind;
+            button.Background = on ? selected : normal;
+            button.FontWeight = on ? FontWeights.Bold : FontWeights.Normal;
+        }
         UpdateCursor(0);
     }
 

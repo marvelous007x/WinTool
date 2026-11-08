@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Drawing = System.Drawing;
 using DrawingImaging = System.Drawing.Imaging;
@@ -51,10 +52,16 @@ public static class ScreenCapture
             }
         }
 
-        using var ms = new MemoryStream();
-        bitmap.Save(ms, DrawingImaging.ImageFormat.Png);
-        ms.Position = 0;
-        var image = BitmapFrame.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+        // 直接搬运像素构造 BitmapSource，避免整屏 PNG 编码 + 解码的往返开销
+        // （之前热键按下后要等两三百毫秒，主要耗在这里）。
+        var data = bitmap.LockBits(new Drawing.Rectangle(0, 0, w, h),
+            DrawingImaging.ImageLockMode.ReadOnly, DrawingImaging.PixelFormat.Format32bppArgb);
+        var pixels = new byte[data.Stride * h];
+        Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+        bitmap.UnlockBits(data);
+
+        // Bgr32 忽略 GDI 位图里未定义的 alpha，保证画面不透明。
+        var image = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgr32, null, pixels, data.Stride);
         image.Freeze();
         return new ScreenShot(image, new Int32Rect(x, y, w, h));
     }

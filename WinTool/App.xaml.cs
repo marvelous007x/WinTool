@@ -97,7 +97,7 @@ public partial class App : Application
         {
             Enabled = Config.ScreenshotEnabled,
         };
-        _screenshotAction.Click += (_, _) => BeginScreenshot();
+        _screenshotAction.Click += (_, _) => BeginScreenshot(waitForMenu: true);
 
         var exit = new WinForms.ToolStripMenuItem("退出");
         exit.Click += (_, _) => ExitApp();
@@ -156,7 +156,7 @@ public partial class App : Application
         if (msg == Native.WM_HOTKEY && wParam.ToInt32() == HotkeyId)
         {
             handled = true;
-            Dispatcher.BeginInvoke(new Action(BeginScreenshot));
+            Dispatcher.BeginInvoke(new Action(() => BeginScreenshot()));
         }
         return IntPtr.Zero;
     }
@@ -193,13 +193,13 @@ public partial class App : Application
 
     // ---- 截图 ----
 
-    async void BeginScreenshot()
+    async void BeginScreenshot(bool waitForMenu = false)
     {
         if (SelectionSession.Active) return; // 已有截图会话（框选中或标注中）
         try
         {
-            // 等托盘菜单/阴影消失，避免被截进画面
-            await Task.Delay(150);
+            // 只有从托盘菜单触发时才需要等菜单/阴影消失；热键触发不等待，响应更快。
+            if (waitForMenu) await Task.Delay(150);
             var shot = ScreenCapture.CaptureVirtualScreen();
             SelectionSession.Begin(shot, rect =>
             {
